@@ -1,0 +1,3 @@
+[manager]
+deployment.targetHost = "69.164.248.38"
+deployment.targetUser = "root"

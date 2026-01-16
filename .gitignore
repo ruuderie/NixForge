@@ -1,0 +1,31 @@
+# Nix
+result
+result-*
+*.drv
+nixos.qcow2
+nixos.qcow2.*
+/nix
+
+# Secrets & env
+secrets/*
+!secrets/*.sops.yaml
+!secrets/*.yaml.example
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs / temp
+*.log
+*.tmp
+
+# Build artifacts
+k3s-*
+*.tar.gz
+*.iso
