@@ -187,12 +187,22 @@
     };
 
     # Colmena hive for deployment
-    colmena = {
-      meta = {
-        nixpkgs = import nixpkgs { system = "x86_64-linux"; };
-      };
-
-      manager = self.nixosConfigurations.manager;
+colmena = {
+  meta = {
+    nixpkgs = import nixpkgs {
+      system = "x86_64-linux";
+      overlays = [ ];
     };
+    specialArgs = { inherit inputs; };
   };
+
+  defaults = {
+    deployment.targetUser = "root";
+  };
+
+  manager = {
+    deployment.targetHost = "69.164.248.38";
+    imports = [ self.nixosConfigurations.manager ];
+  };
+};
 }
