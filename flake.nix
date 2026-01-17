@@ -165,7 +165,7 @@
       modules = [ ./darwin-configuration.nix ];
     };
 
-    # Colmena deployment hive
+    # Colmena deployment hive - this is the entry point Colmena looks for
     colmena = {
       meta = {
         nixpkgs = import nixpkgs { system = "x86_64-linux"; };
@@ -179,8 +179,5 @@
         imports = [ self.nixosConfigurations.manager ];
       };
     };
-
-    # Required for Colmena on macOS (aarch64-darwin)
-    packages.aarch64-darwin.colmenaHive = colmena.lib.makeHive self.colmena;
   };
 }
