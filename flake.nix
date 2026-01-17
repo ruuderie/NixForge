@@ -126,7 +126,7 @@
             extraGroups = [ "wheel" "libvirtd" ];
             openssh.authorizedKeys.keys = [
               "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"  # Same as root
-            };
+            ];
           };
 
           security.sudo = {
