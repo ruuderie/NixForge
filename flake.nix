@@ -159,11 +159,13 @@
       ];
     };
 
+    # macOS builder configuration
     darwinConfigurations.builder = darwin.lib.darwinSystem {
       system = "aarch64-darwin";
       modules = [ ./darwin-configuration.nix ];
     };
 
+    # Colmena deployment hive
     colmena = {
       meta = {
         nixpkgs = import nixpkgs { system = "x86_64-linux"; };
@@ -178,6 +180,7 @@
       };
     };
 
-    packages.aarch64-darwin.colmenaHive = colmena.lib.mkHive self.colmena;
+    # Required for Colmena on macOS (aarch64-darwin)
+    packages.aarch64-darwin.colmenaHive = colmena.lib.makeHive self.colmena;
   };
 }
