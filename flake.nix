@@ -14,7 +14,7 @@
   };
 
   # What this flake produces (outputs)
-  outputs = { self, nixpkgs, disko, sops-nix, darwin, ... }@inputs: {
+  outputs = { self, nixpkgs, disko, sops-nix, darwin, ... }@inputs: rec {
     # Defines a complete NixOS system configuration called "manager"
     nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
