@@ -4,52 +4,59 @@
 
   # External dependencies (inputs) the flake uses
   inputs = {
-    # NixOS packages (unstable branch for latest features)
+    # Main NixOS package set - using the unstable branch for latest features
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Disko for declarative disk partitioning
+    # Disko - tool for declarative disk partitioning
     disko.url = "github:nix-community/disko";
+    # Make sure disko uses the same nixpkgs version as we do
     disko.inputs.nixpkgs.follows = "nixpkgs";
 
-    # sops-nix for managing encrypted secrets
+    # sops-nix for secrets management
     sops-nix.url = "github:Mic92/sops-nix";
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
 
-    # nix-darwin for macOS builder VM
+    # nix-darwin for macOS builder
     darwin.url = "github:LnL7/nix-darwin";
     darwin.inputs.nixpkgs.follows = "nixpkgs";
 
-    # Colmena for deploying to the server
+    # Colmena for deployment
     colmena.url = "github:zhaofengli/colmena";
     colmena.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  # Outputs produced by this flake
+  # What this flake produces (outputs)
   outputs = { self, nixpkgs, disko, sops-nix, darwin, colmena, ... }@inputs: {
-    # NixOS config for the manager server
+    # NixOS configuration for the manager server
     nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";  # Target architecture
+      # Target architecture (standard 64-bit Intel/AMD)
+      system = "x86_64-linux";
 
+      # List of modules that together define the system
       modules = [
-        disko.nixosModules.disko              # Enable disko module
-        sops-nix.nixosModules.sops            # Enable sops-nix module
+        # Include the disko module so we can use declarative disk config
+        disko.nixosModules.disko
+        # Include sops-nix for encrypted secrets
+        sops-nix.nixosModules.sops
 
-        # Main system configuration
+        # Main configuration (anonymous module)
         ({ config, pkgs, ... }: {
-          nix.settings.experimental-features = [ "nix-command" "flakes" ];  # Enable flakes and new CLI
+          # Enable modern nix features we need
+          nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
-          boot.loader.systemd-boot.enable = true;  # Use systemd-boot bootloader
-          boot.loader.efi.canTouchEfiVariables = true;  # Allow EFI variable changes
+          # Bootloader configuration for UEFI systems
+          boot.loader.systemd-boot.enable = true;
+          boot.loader.efi.canTouchEfiVariables = true;
 
-          # Declarative disk layout (disko)
+          # === DISK LAYOUT (disko) - NO LUKS for first install ===
           disko.devices = {
             disk.main = {
               type = "disk";
-              device = "/dev/nvme0n1";  # Your first NVMe drive
+              device = "/dev/nvme0n1";  # ← CHANGE if using nvme1n1
               content = {
-                type = "gpt";  # GPT partition table
+                type = "gpt";
                 partitions = {
-                  ESP = {  # EFI System Partition
+                  ESP = {
                     type = "EF00";
                     size = "512M";
                     content = {
@@ -58,16 +65,22 @@
                       mountpoint = "/boot";
                     };
                   };
-                  root = {  # Main root partition
+                  root = {
                     size = "100%";
                     content = {
                       type = "filesystem";
                       format = "btrfs";
                       extraArgs = [ "-L" "nixos" ];
                       subvolumes = {
-                        "/" = { mountpoint = "/"; };           # Root subvolume
-                        "/nix" = { mountpoint = "/nix"; };     # Nix store
-                        "/persist" = { mountpoint = "/persist"; };  # Persistent data
+                        "/" = {
+                          mountpoint = "/";
+                        };
+                        "/nix" = {
+                          mountpoint = "/nix";
+                        };
+                        "/persist" = {
+                          mountpoint = "/persist";
+                        };
                       };
                     };
                   };
@@ -76,111 +89,118 @@
             };
           };
 
-          # Network settings
+          # Basic network config
           networking = {
-            hostName = "manager";  # Hostname of the server
-            interfaces.enp10s0f1np1.ipv4.addresses = [{  # Static IP config
+            hostName = "manager";
+            # Static IP from InterServer
+            interfaces.enp10s0f1np1.ipv4.addresses = [{
               address = "69.164.248.38";
               prefixLength = 30;
             }];
-            defaultGateway = "69.164.248.37";  # Gateway IP
-            nameservers = [ "8.8.8.8" "1.1.1.1" ];  # DNS servers
+            defaultGateway = "69.164.248.37";
+            nameservers = [ "8.8.8.8" "1.1.1.1" ];
           };
 
-          # Firewall - only open necessary ports
+          # Firewall: Allow SSH, k3s API, and HTTP/HTTPS for future ingress
           networking.firewall = {
             enable = true;
-            allowedTCPPorts = [ 22 6443 80 443 ];  # SSH, k3s API, HTTP/HTTPS
+            allowedTCPPorts = [ 22 6443 80 443 ];
           };
 
-          # SSH server configuration
+          # SSH hardening
           services.openssh = {
             enable = true;
             settings = {
-              PasswordAuthentication = false;  # Disable password login
-              PermitRootLogin = "prohibit-password";  # Disable root password login
-              KbdInteractiveAuthentication = false;  # Disable keyboard-interactive
+              PasswordAuthentication = false;
+              PermitRootLogin = "prohibit-password";
+              KbdInteractiveAuthentication = false;
             };
           };
 
-          # Root user SSH keys
+          # ← CHANGE: paste your public SSH key here (from 1Password)
           users.users.root.openssh.authorizedKeys.keys = [
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
-          ];
-
-          # Non-root user 'ruud' for daily use
+          ]; 
           users.users.ruud = {
             isNormalUser = true;
-            extraGroups = [ "wheel" "libvirtd" ];  # sudo + libvirt access
+            extraGroups = [ "wheel" "libvirtd" ];
             openssh.authorizedKeys.keys = [
-              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
-            ];
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"  # Same as root
+            };
           };
 
           security.sudo = {
             enable = true;
-            wheelNeedsPassword = false;  # sudo without password for wheel group
+            wheelNeedsPassword = false;
           };
 
-          # sops-nix for secrets
+          # sops secrets (example: add your age key)
           sops = {
-            age.keyFile = "/var/lib/sops-nix/key.txt";  # Path to age key
-            defaultSopsFile = ./secrets/secrets.yaml;   # Default encrypted file
+            age.keyFile = "/var/lib/sops-nix/key.txt";  # Generate with age-keygen
+            defaultSopsFile = ./secrets/secrets.yaml;   # Encrypted file
           };
 
-          # k3s Kubernetes cluster
+          # === k3s Kubernetes (lightweight distro) ===
           services.k3s = {
-            enable = true;
-            role = "server";  # Control plane node
-            clusterInit = true;  # Initialize cluster
-            extraFlags = "--disable=traefik --kube-apiserver-arg=audit-log-path=/var/log/k3s/audit.log";
+            enable = true;              # Turn on k3s
+            role = "server";            # This node will be a control-plane
+            clusterInit = true;         # Initialize a new single-node cluster
+            extraFlags = "--disable=traefik --kube-apiserver-arg=audit-log-path=/var/log/k3s/audit.log";  # Secure extras: disable defaults, enable audit
           };
 
-          # Libvirt for virtual machines
+          # VMs (libvirt + virt-manager)
           virtualisation.libvirtd.enable = true;
           programs.virt-manager.enable = true;
           users.users.root.extraGroups = [ "libvirtd" ];
 
-          # Podman for Docker-compatible containers
+          # Docker-compatible containers via Podman (declarative, git-friendly)
           virtualisation.podman = {
             enable = true;
-            dockerCompat = true;  # Make podman act like docker
+            dockerCompat = true;
             defaultNetwork.settings.dns_enabled = true;
           };
 
-          # Useful system packages
+          # Security tools
           environment.systemPackages = with pkgs; [
-            kubectl k9s helm curl git fail2ban bandwhich restic podman-compose
+            kubectl      # Kubernetes CLI
+            k9s          # Terminal UI for Kubernetes
+            helm         # Package manager for Kubernetes
+            curl
+            git
+            fail2ban     # Brute-force protection
+            bandwhich    # Rust-based net inspector
+            restic       # Rust-based encrypted backups
+            podman-compose   # for version-controlled podman-compose.yml files
           ];
 
-          # Fail2ban for brute-force protection
+          # Fail2ban config (jails for SSH, k3s API)
           services.fail2ban.enable = true;
 
-          # Automatic system updates (no reboot)
+          # Auto-updates
           system.autoUpgrade = {
             enable = true;
             allowReboot = false;
           };
 
-          # Kernel hardening parameters
+          # Kernel hardening
           boot.kernel.sysctl = {
             "kernel.unprivileged_bpf_disabled" = 1;
             "net.core.bpf_jit_enable" = 0;
           };
 
-          # NixOS state version - NEVER change after first install
+          # NixOS state version - do NOT change after first install
           system.stateVersion = "25.05";
         })
       ];
     };
 
-    # macOS builder config (for cross-compiling)
+    # macOS builder configuration
     darwinConfigurations.builder = darwin.lib.darwinSystem {
       system = "aarch64-darwin";
       modules = [ ./darwin-configuration.nix ];
     };
 
-    # Colmena deployment configuration
+    # Colmena deployment hive - Colmena reads this attribute directly
     colmena = {
       meta = {
         nixpkgs = import nixpkgs { system = "x86_64-linux"; };
@@ -191,7 +211,7 @@
 
       manager = {
         deployment.targetHost = "69.164.248.38";
-        imports = [ self.nixosConfigurations.manager ];
+        imports = self.nixosConfigurations.manager.config.system.build.modules;
       };
     };
   };
