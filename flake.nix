@@ -25,140 +25,137 @@
   };
 
   # What this flake produces (outputs)
-  outputs = { self, nixpkgs, disko, sops-nix, darwin, colmena, ... }@inputs: let
-    # Extract modules for reuse in Colmena
-    managerModules = [
-      disko.nixosModules.disko
-      sops-nix.nixosModules.sops
+  outputs = { self, nixpkgs, disko, sops-nix, darwin, colmena, ... }@inputs: {
+    # NixOS configuration for the manager server
+    nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
 
-      ({ config, pkgs, ... }: {
-        nix.settings.experimental-features = [ "nix-command" "flakes" ];
+      modules = [
+        disko.nixosModules.disko
+        sops-nix.nixosModules.sops
 
-        boot.loader.systemd-boot.enable = true;
-        boot.loader.efi.canTouchEfiVariables = true;
+        ({ config, pkgs, ... }: {
+          nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
-        # Disk layout - NO LUKS for first install
-        disko.devices = {
-          disk.main = {
-            type = "disk";
-            device = "/dev/nvme0n1";
-            content = {
-              type = "gpt";
-              partitions = {
-                ESP = {
-                  type = "EF00";
-                  size = "512M";
-                  content = {
-                    type = "filesystem";
-                    format = "vfat";
-                    mountpoint = "/boot";
+          boot.loader.systemd-boot.enable = true;
+          boot.loader.efi.canTouchEfiVariables = true;
+
+          disko.devices = {
+            disk.main = {
+              type = "disk";
+              device = "/dev/nvme0n1";
+              content = {
+                type = "gpt";
+                partitions = {
+                  ESP = {
+                    type = "EF00";
+                    size = "512M";
+                    content = {
+                      type = "filesystem";
+                      format = "vfat";
+                      mountpoint = "/boot";
+                    };
                   };
-                };
-                root = {
-                  size = "100%";
-                  content = {
-                    type = "filesystem";
-                    format = "btrfs";
-                    extraArgs = [ "-L" "nixos" ];
-                    subvolumes = {
-                      "/" = { mountpoint = "/"; };
-                      "/nix" = { mountpoint = "/nix"; };
-                      "/persist" = { mountpoint = "/persist"; };
+                  root = {
+                    size = "100%";
+                    content = {
+                      type = "filesystem";
+                      format = "btrfs";
+                      extraArgs = [ "-L" "nixos" ];
+                      subvolumes = {
+                        "/" = { mountpoint = "/"; };
+                        "/nix" = { mountpoint = "/nix"; };
+                        "/persist" = { mountpoint = "/persist"; };
+                      };
                     };
                   };
                 };
               };
             };
           };
-        };
 
-        networking = {
-          hostName = "manager";
-          interfaces.enp10s0f1np1.ipv4.addresses = [{
-            address = "69.164.248.38";
-            prefixLength = 30;
-          }];
-          defaultGateway = "69.164.248.37";
-          nameservers = [ "8.8.8.8" "1.1.1.1" ];
-        };
-
-        networking.firewall = {
-          enable = true;
-          allowedTCPPorts = [ 22 6443 80 443 ];
-        };
-
-        services.openssh = {
-          enable = true;
-          settings = {
-            PasswordAuthentication = false;
-            PermitRootLogin = "prohibit-password";
-            KbdInteractiveAuthentication = false;
+          networking = {
+            hostName = "manager";
+            interfaces.enp10s0f1np1.ipv4.addresses = [{
+              address = "69.164.248.38";
+              prefixLength = 30;
+            }];
+            defaultGateway = "69.164.248.37";
+            nameservers = [ "8.8.8.8" "1.1.1.1" ];
           };
-        };
 
-        users.users.root.openssh.authorizedKeys.keys = [
-          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
-        ];
+          networking.firewall = {
+            enable = true;
+            allowedTCPPorts = [ 22 6443 80 443 ];
+          };
 
-        users.users.ruud = {
-          isNormalUser = true;
-          extraGroups = [ "wheel" "libvirtd" ];
-          openssh.authorizedKeys.keys = [
+          services.openssh = {
+            enable = true;
+            settings = {
+              PasswordAuthentication = false;
+              PermitRootLogin = "prohibit-password";
+              KbdInteractiveAuthentication = false;
+            };
+          };
+
+          users.users.root.openssh.authorizedKeys.keys = [
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
           ];
-        };
 
-        security.sudo = {
-          enable = true;
-          wheelNeedsPassword = false;
-        };
+          users.users.ruud = {
+            isNormalUser = true;
+            extraGroups = [ "wheel" "libvirtd" ];
+            openssh.authorizedKeys.keys = [
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
+            ];
+          };
 
-        sops = {
-          age.keyFile = "/var/lib/sops-nix/key.txt";
-          defaultSopsFile = ./secrets/secrets.yaml;
-        };
+          security.sudo = {
+            enable = true;
+            wheelNeedsPassword = false;
+          };
 
-        services.k3s = {
-          enable = true;
-          role = "server";
-          clusterInit = true;
-          extraFlags = "--disable=traefik --kube-apiserver-arg=audit-log-path=/var/log/k3s/audit.log";
-        };
+          sops = {
+            age.keyFile = "/var/lib/sops-nix/key.txt";
+            defaultSopsFile = ./secrets/secrets.yaml;
+          };
 
-        virtualisation.libvirtd.enable = true;
-        programs.virt-manager.enable = true;
-        users.users.root.extraGroups = [ "libvirtd" ];
+          services.k3s = {
+            enable = true;
+            role = "server";
+            clusterInit = true;
+            extraFlags = "--disable=traefik --kube-apiserver-arg=audit-log-path=/var/log/k3s/audit.log";
+          };
 
-        virtualisation.podman = {
-          enable = true;
-          dockerCompat = true;
-          defaultNetwork.settings.dns_enabled = true;
-        };
+          virtualisation.libvirtd.enable = true;
+          programs.virt-manager.enable = true;
+          users.users.root.extraGroups = [ "libvirtd" ];
 
-        environment.systemPackages = with pkgs; [
-          kubectl k9s helm curl git fail2ban bandwhich restic podman-compose
-        ];
+          virtualisation.podman = {
+            enable = true;
+            dockerCompat = true;
+            defaultNetwork.settings.dns_enabled = true;
+          };
 
-        services.fail2ban.enable = true;
+          environment.systemPackages = with pkgs; [
+            kubectl k9s helm curl git fail2ban bandwhich restic podman-compose
+          ];
 
-        system.autoUpgrade = {
-          enable = true;
-          allowReboot = false;
-        };
+          services.fail2ban.enable = true;
 
-        boot.kernel.sysctl = {
-          "kernel.unprivileged_bpf_disabled" = 1;
-          "net.core.bpf_jit_enable" = 0;
-        };
+          system.autoUpgrade = {
+            enable = true;
+            allowReboot = false;
+          };
 
-        system.stateVersion = "25.05";
-      })
-    ];
-  in {
-    # NixOS configuration for the manager server
-    nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
-      modules = managerModules;
+          boot.kernel.sysctl = {
+            "kernel.unprivileged_bpf_disabled" = 1;
+            "net.core.bpf_jit_enable" = 0;
+          };
+
+          system.stateVersion = "25.05";
+        })
+      ];
     };
 
     # macOS builder configuration
@@ -167,7 +164,7 @@
       modules = [ ./darwin-configuration.nix ];
     };
 
-    # Colmena deployment hive - uses the shared modules list
+    # Colmena deployment hive - Colmena reads this attribute
     colmena = {
       meta = {
         nixpkgs = import nixpkgs { system = "x86_64-linux"; };
@@ -178,8 +175,11 @@
 
       manager = {
         deployment.targetHost = "69.164.248.38";
-        imports = managerModules;
+        imports = [ self.nixosConfigurations.manager ];
       };
     };
+
+    # Required wrapper for Colmena on macOS (aarch64-darwin)
+    packages.aarch64-darwin.colmenaHive = colmena.lib.makeHive self.colmena;
   };
 }
