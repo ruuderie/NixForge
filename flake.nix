@@ -207,6 +207,10 @@
             restic       # Rust-based encrypted backups
             podman-compose   # for version-controlled podman-compose.yml files
           ];
+          # Set KUBECONFIG environment variable for kubectl access
+          environment.variables = {
+            KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
+          };
 
           # Fail2ban config (jails for SSH, k3s API)
           services.fail2ban.enable = true;
