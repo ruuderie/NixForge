@@ -4,21 +4,25 @@
 
   # External dependencies (inputs) the flake uses
   inputs = {
-    # Main NixOS package set - using the unstable branch for latest features
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Disko - tool for declarative disk partitioning
     disko.url = "github:nix-community/disko";
-    # Make sure disko uses the same nixpkgs version as we do
     disko.inputs.nixpkgs.follows = "nixpkgs";
-
-    # sops-nix for secrets management
     sops-nix.url = "github:Mic92/sops-nix";
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
+    darwin.url = "github:LnL7/nix-darwin";
+    darwin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   # What this flake produces (outputs)
   outputs = { self, nixpkgs, disko, sops-nix, ... }@inputs: {
+    darwinConfigurations = {
+      builder = darwin.lib.darwinSystem {
+        system = "aarch64-darwin";
+        modules = [
+          ./darwin-configuration.nix
+        ];
+      };
+    };
     # Defines a complete NixOS system configuration called "manager"
     nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
       # Target architecture (standard 64-bit Intel/AMD)
@@ -187,22 +191,23 @@
     };
 
     # Colmena hive for deployment
-colmena = {
-  meta = {
-    nixpkgs = import nixpkgs {
-      system = "x86_64-linux";
-      overlays = [ ];
+    colmena = {
+      meta = {
+        nixpkgs = import nixpkgs {
+          system = "x86_64-linux";
+          overlays = [ ];
+        };
+        specialArgs = { inherit inputs; };
+      };
+
+      defaults = {
+        deployment.targetUser = "root";
+      };
+
+      manager = {
+        deployment.targetHost = "69.164.248.38";
+        imports = [ self.nixosConfigurations.manager ];
+      };
     };
-    specialArgs = { inherit inputs; };
   };
-
-  defaults = {
-    deployment.targetUser = "root";
-  };
-
-  manager = {
-    deployment.targetHost = "69.164.248.38";
-    imports = [ self.nixosConfigurations.manager ];
-  };
-};
 }
