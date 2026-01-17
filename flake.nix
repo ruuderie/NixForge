@@ -1,6 +1,8 @@
 {
+  # Human-readable description of what this flake does
   description = "NixForge - Secure Manager Node with k3s";
 
+  # External dependencies (inputs) the flake uses
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     disko.url = "github:nix-community/disko";
@@ -11,7 +13,9 @@
     darwin.inputs.nixpkgs.follows = "nixpkgs";
   };
 
+  # What this flake produces (outputs)
   outputs = { self, nixpkgs, disko, sops-nix, darwin, ... }@inputs: {
+    # Defines a complete NixOS system configuration called "manager"
     nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
 
@@ -161,5 +165,7 @@
         imports = [ self.nixosConfigurations.manager ];
       };
     };
+
+    packages.aarch64-darwin.colmenaHive = colmena.lib.mkHive self.colmena;
   };
 }
