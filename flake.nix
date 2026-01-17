@@ -4,18 +4,29 @@
 
   # External dependencies (inputs) the flake uses
   inputs = {
+    # Main NixOS package set - using the unstable branch for latest features
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # Disko - tool for declarative disk partitioning
     disko.url = "github:nix-community/disko";
     disko.inputs.nixpkgs.follows = "nixpkgs";
+
+    # sops-nix for secrets management
     sops-nix.url = "github:Mic92/sops-nix";
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
+
+    # nix-darwin for macOS builder
     darwin.url = "github:LnL7/nix-darwin";
     darwin.inputs.nixpkgs.follows = "nixpkgs";
+
+    # Colmena for deployment
+    colmena.url = "github:zhaofengli/colmena";
+    colmena.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   # What this flake produces (outputs)
-  outputs = { self, nixpkgs, disko, sops-nix, darwin, ... }@inputs: rec {
-    # Defines a complete NixOS system configuration called "manager"
+  outputs = { self, nixpkgs, disko, sops-nix, darwin, colmena, ... }@inputs: {
+    # NixOS configuration for the manager server
     nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
 
@@ -29,6 +40,7 @@
           boot.loader.systemd-boot.enable = true;
           boot.loader.efi.canTouchEfiVariables = true;
 
+          # Disk layout - NO LUKS for first install
           disko.devices = {
             disk.main = {
               type = "disk";
