@@ -1,31 +1,29 @@
-# Nix
+# Secrets and sensitive files
+# Ignore secrets folder generally
+secrets/
+
+# But allow the encrypted config and the example
+!secrets/secrets.yaml
+!secrets/secrets.yaml.example
+*.key
+*.pem
+
+# Nix build artifacts
 result
 result-*
-*.drv
-nixos.qcow2
-nixos.qcow2.*
-/nix
 
-# Secrets & env
-secrets/*
-!secrets/*.sops.yaml
-!secrets/*.yaml.example
-.env
-.env.*
-!.env.example
-
-# Editors / OS
+# macOS
 .DS_Store
+
+# Editor files
 .vscode/
 .idea/
 *.swp
-*~
+*.swo
 
-# Logs / temp
+# Logs
 *.log
-*.tmp
 
-# Build artifacts
-k3s-*
-*.tar.gz
-*.iso
+# Temporary files
+*.tmp
+*.bak

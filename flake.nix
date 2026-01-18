@@ -33,6 +33,15 @@
     # Define the system architecture for Linux builds (used for cross-compilation from macOS)
     system = "x86_64-linux";
 
+    # === CONFIGURATION PARAMETERS ===
+    # Abstract IP configuration for flexibility across environments
+    # Use environment variables or sops secrets for sensitive values
+    serverConfig = {
+      ip = builtins.getEnv "SERVER_IP" or "YOUR_SERVER_IP";        # Server IP address
+      gateway = builtins.getEnv "SERVER_GATEWAY" or "YOUR_GATEWAY"; # Default gateway
+      interface = builtins.getEnv "SERVER_INTERFACE" or "enp10s0f1np1"; # Network interface
+    };
+
     # === SHARED CONFIGURATION ===
     # We define the modules list here so we can share it between the standard 'nixosConfigurations'
     # and the 'colmena' deployment configuration.
@@ -115,14 +124,14 @@
             # Hostname of the server
             hostName = "manager";
             # Static IP from InterServer configuration
-            interfaces.enp10s0f1np1.ipv4.addresses = [{
+            interfaces.${serverConfig.interface}.ipv4.addresses = [{
               # IP address of the server
-              address = "69.164.248.38";
+              address = serverConfig.ip;
               # Prefix length (subnet mask)
               prefixLength = 30;
             }];
             # Default gateway IP for routing traffic out
-            defaultGateway = "69.164.248.37";
+            defaultGateway = serverConfig.gateway;
             # DNS servers (Google and Cloudflare)
             nameservers = [ "8.8.8.8" "1.1.1.1" ];
             
@@ -223,7 +232,7 @@
             enable = true;
             settings = {
               server = {
-                # Accessible on http://69.164.248.38:3000
+                # Accessible on http://${serverConfig.ip}:3000
                 http_addr = "0.0.0.0";
                 http_port = 3000;
               };
@@ -251,21 +260,34 @@
             };
           };
 
-          # SSH key for root user access
+          # SSH key for root user access (loaded from sops secrets)
           users.users.root.openssh.authorizedKeys.keys = [
-            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
-          ]; 
+            builtins.readFile config.sops.secrets."ssh_keys/root".path
+          ];
 
           # Configuration for non-root user 'ruud'
           users.users.ruud = {
             # This is a regular user account
             isNormalUser = true;
             # Groups for sudo (wheel), libvirt access, and container management
-            extraGroups = [ "wheel" "libvirtd" "docker" ]; 
-            # SSH keys for this user
+            extraGroups = [ "wheel" "libvirtd" "docker" ];
+            # SSH keys for this user (loaded from sops secrets)
             openssh.authorizedKeys.keys = [
-              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
+              builtins.readFile config.sops.secrets."ssh_keys/ruud".path
             ];
+          };
+
+          # Additional sops secrets configuration
+          sops.secrets = {
+            "ssh_keys/root" = {
+              # The secret contains the SSH key content
+              sopsFile = ./secrets/secrets.yaml;
+              format = "yaml";
+            };
+            "ssh_keys/ruud" = {
+              sopsFile = ./secrets/secrets.yaml;
+              format = "yaml";
+            };
           };
 
           # Sudo configuration
@@ -405,7 +427,7 @@
       # Node definition for 'manager'
       manager = {
         # The IP address of the target server
-        deployment.targetHost = "69.164.248.38";
+        deployment.targetHost = serverConfig.ip;
         # Import the shared configuration modules
         imports = managerModules;
       };
