@@ -4,6 +4,7 @@
   # =======================================================================================
   # Description: Defines the declarative configuration for the 'Manager' node.
   # Role: Hybrid K3s Control Plane + High-Performance Database Host + Observability Hub.
+  # Security Level: High (Secrets Encrypted, IPs Gitignored, SSH Hardened).
   description = "NixForge - Secure Manager Node with k3s + Data Services";
 
   # =======================================================================================
@@ -11,33 +12,32 @@
   # Sources for all software and modules used in this configuration.
   # =======================================================================================
   inputs = {
-    # Main NixOS package set. 
-    # We use 'unstable' to get the absolute latest kernel, Postgres 16, and k3s versions.
+    # NixOS Main Repository: Using 'unstable' for access to the latest kernel and software versions.
+    # Rationale: We need the latest Postgres 16 extensions and K3s updates not found in stable.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Disko: Provides declarative disk partitioning.
-    # Allows us to format and partition the NVMe drive via Nix code, not manual scripts.
+    # Rationale: Allows us to format and partition the NVMe drive via Nix code, ensuring reproducibility
+    # without relying on imperative manual scripts during install.
     disko.url = "github:nix-community/disko";
-    # Force disko to use our version of nixpkgs to avoid dependency conflicts.
-    disko.inputs.nixpkgs.follows = "nixpkgs";
+    disko.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
 
     # Sops-Nix: Secrets management integration (Mozilla SOPS).
-    # Decrypts secrets (API keys, passwords) at runtime using the server's SSH key.
+    # Rationale: Decrypts secrets (API keys, passwords) at runtime using the server's SSH key.
+    # This keeps secrets encrypted in the git repo.
     sops-nix.url = "github:Mic92/sops-nix";
-    # Force sops-nix to use our version of nixpkgs.
-    sops-nix.inputs.nixpkgs.follows = "nixpkgs";
+    sops-nix.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
 
     # Nix-Darwin: Allows managing the macOS build environment (your local laptop).
-    # Useful if you want to enforce specific developer tooling on your Mac.
+    # Rationale: Ensures your local toolchain (colmena, sops) matches the server's version.
     darwin.url = "github:LnL7/nix-darwin";
-    # Force darwin to use our version of nixpkgs.
-    darwin.inputs.nixpkgs.follows = "nixpkgs";
+    darwin.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
 
-    # Colmena: The deployment tool. 
-    # Replaces 'nixos-rebuild' for remote deployments, offering parallel builds and better logs.
+    # Colmena: The deployment tool.
+    # Rationale: Replaces 'nixos-rebuild' for remote deployments. It is faster (parallel builds),
+    # has better logs, and handles remote state more robustly.
     colmena.url = "github:zhaofengli/colmena";
-    # Force colmena to use our version of nixpkgs.
-    colmena.inputs.nixpkgs.follows = "nixpkgs";
+    colmena.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
   };
 
   # =======================================================================================
@@ -48,22 +48,26 @@
     # Target Architecture: The server is a standard Intel/AMD 64-bit machine.
     system = "x86_64-linux";
 
-    # --- HELPER: ENVIRONMENT VARIABLE LOADER ---
-    # Rationale: Nix's built-in `getEnv` returns an empty string if a var is missing.
-    # This helper checks for empty strings and provides a safe default.
-    getEnv = name: default:
-      let val = builtins.getEnv name;
-      in if val != "" then val else default;
-
-    # --- CONFIGURATION: NETWORK PARAMETERS ---
-    # Rationale: Abstracting these values here makes the config portable.
-    # We use the 'getEnv' helper to allow overriding these via CLI if needed later.
-    serverConfig = {
-      # Fallback to a dummy IP to prevent accidental leakage in public code
-      ip = getEnv "SERVER_IP" "127.0.0.1";
-      gateway = getEnv "SERVER_GATEWAY" "127.0.0.1"; 
-      interface = getEnv "SERVER_INTERFACE" "enp10s0f1np1"; # Interface names are generally safe to publish
-    };
+    # === ARCHITECTURAL PATTERN: GITIGNORED CONFIGURATION ===
+    # Rationale: We separate "Code" (Public) from "State" (Private IPs).
+    # This allows the repo to be public on GitHub without leaking the server's location.
+    configPath = ./local-config.nix;
+    
+    # Logic: Try to import the private file. If missing, fail with a helpful error.
+    serverConfig = if builtins.pathExists configPath 
+      then import configPath 
+      else throw ''
+        CRITICAL ARCHITECTURE ERROR: 'local-config.nix' is missing!
+        
+        To deploy this flake safely, you must create 'local-config.nix' in the root directory
+        and add it to .gitignore. It should contain your private infrastructure details:
+        
+        {
+          serverIP = "YOUR_IP";
+          serverGateway = "YOUR_GATEWAY";
+          serverInterface = "enp10s0f1np1";
+        }
+      '';
 
     # ===================================================================================
     # 3. MANAGER MODULES (SHARED CONFIGURATION)
@@ -82,11 +86,11 @@
           nix.settings.experimental-features = [ "nix-command" "flakes" ];
           
           # Licensing: Allow unfree packages. 
-          # Required for TimescaleDB (TSL license), hardware drivers, and some monitoring tools.
+          # Rationale: Required for TimescaleDB (TSL license), hardware drivers, and some monitoring tools.
           nixpkgs.config.allowUnfree = true;
 
           # Bootloader: Use systemd-boot.
-          # It is simpler and faster than GRUB for modern UEFI systems.
+          # Rationale: It is simpler and faster than GRUB for modern UEFI systems.
           boot.loader.systemd-boot.enable = true;
           # EFI: Allow NixOS to update boot variables in the motherboard NVRAM.
           boot.loader.efi.canTouchEfiVariables = true;
@@ -131,12 +135,13 @@
           networking = {
             hostName = "manager"; # The internal hostname of the server
             # Static IP Configuration:
-            # Critical for a server to ensure consistent reachability and DNS mapping.
-            interfaces.${serverConfig.interface}.ipv4.addresses = [{
-              address = serverConfig.ip;
+            # Rationale: Critical for a server to ensure consistent reachability and DNS mapping.
+            # We load the actual values from the gitignored 'local-config.nix'.
+            interfaces.${serverConfig.serverInterface}.ipv4.addresses = [{
+              address = serverConfig.serverIP;
               prefixLength = 30; # Subnet mask (provider specific)
             }];
-            defaultGateway = serverConfig.gateway; # Routing gateway
+            defaultGateway = serverConfig.serverGateway; # Routing gateway
             nameservers = [ "8.8.8.8" "1.1.1.1" ]; # Upstream DNS (Google/Cloudflare)
             
             # Security: Firewall Configuration
@@ -155,6 +160,8 @@
           };
 
           # --- DATABASE LAYER: POSTGRESQL (Hybrid Stack) ---
+          # Rationale: Running DB on bare metal (not inside K8s) provides max NVMe performance
+          # and simplifies backup/restore of massive datasets.
           services.postgresql = {
             enable = true;
             package = pkgs.postgresql_16; # Use latest stable Major version (16)
@@ -409,7 +416,9 @@
       };
 
       manager = {
-        deployment.targetHost = serverConfig.ip; # Where to deploy
+        # Dynamically load the IP from the gitignored 'local-config.nix' file.
+        # This resolves the issue of purity (by importing a file) while keeping secrets separate.
+        deployment.targetHost = serverConfig.serverIP;
         imports = managerModules; # What to deploy
       };
     };
