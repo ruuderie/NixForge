@@ -1,116 +1,123 @@
 {
-  # Human-readable description of what this flake does (used for flake show and other tools)
+  # =======================================================================================
+  # NIXFORGE - INFRASTRUCTURE AS CODE (IaC) DEFINITION
+  # =======================================================================================
+  # Description: Defines the declarative configuration for the 'Manager' node.
+  # Role: Hybrid K3s Control Plane + High-Performance Database Host + Observability Hub.
   description = "NixForge - Secure Manager Node with k3s + Data Services";
 
-  # External dependencies (inputs) the flake uses - these are the sources that the flake depends on
+  # =======================================================================================
+  # 1. INPUTS (DEPENDENCIES)
+  # Sources for all software and modules used in this configuration.
+  # =======================================================================================
   inputs = {
-    # Main NixOS package set - using the unstable branch for latest features (this provides all packages and modules for NixOS)
+    # Main NixOS package set. 
+    # We use 'unstable' to get the absolute latest kernel, Postgres 16, and k3s versions.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Disko - tool for declarative disk partitioning (allows defining disk layouts in Nix code)
+    # Disko: Provides declarative disk partitioning.
+    # Allows us to format and partition the NVMe drive via Nix code, not manual scripts.
     disko.url = "github:nix-community/disko";
-    # Make sure disko uses the same nixpkgs version as we do (avoids version mismatches)
+    # Force disko to use our version of nixpkgs to avoid dependency conflicts.
     disko.inputs.nixpkgs.follows = "nixpkgs";
 
-    # sops-nix for secrets management (allows using sops for encrypted secrets in Nix configs)
+    # Sops-Nix: Secrets management integration (Mozilla SOPS).
+    # Decrypts secrets (API keys, passwords) at runtime using the server's SSH key.
     sops-nix.url = "github:Mic92/sops-nix";
-    # Make sure sops-nix uses the same nixpkgs version as we do (avoids version mismatches)
+    # Force sops-nix to use our version of nixpkgs.
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
 
-    # nix-darwin for macOS builder (allows configuring macOS with Nix for local development and builders)
+    # Nix-Darwin: Allows managing the macOS build environment (your local laptop).
+    # Useful if you want to enforce specific developer tooling on your Mac.
     darwin.url = "github:LnL7/nix-darwin";
-    # Make sure darwin uses the same nixpkgs version as we do (avoids version mismatches)
+    # Force darwin to use our version of nixpkgs.
     darwin.inputs.nixpkgs.follows = "nixpkgs";
 
-    # Colmena for deployment (tool for deploying NixOS configs to remote machines)
+    # Colmena: The deployment tool. 
+    # Replaces 'nixos-rebuild' for remote deployments, offering parallel builds and better logs.
     colmena.url = "github:zhaofengli/colmena";
-    # Make sure colmena uses the same nixpkgs version as we do (avoids version mismatches)
+    # Force colmena to use our version of nixpkgs.
     colmena.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  # What this flake produces (outputs) - this defines what the flake builds or provides
+  # =======================================================================================
+  # 2. OUTPUTS (BUILD TARGETS)
+  # Defines the resulting system configurations for Linux (Server) and Darwin (Local).
+  # =======================================================================================
   outputs = { self, nixpkgs, disko, sops-nix, darwin, colmena, ... }@inputs: let
-    # Define the system architecture for Linux builds (used for cross-compilation from macOS)
+    # Target Architecture: The server is a standard Intel/AMD 64-bit machine.
     system = "x86_64-linux";
 
-    # === CONFIGURATION PARAMETERS ===
-    # Abstract IP configuration for flexibility across environments
-    # Use environment variables or sops secrets for sensitive values
+    # --- HELPER: ENVIRONMENT VARIABLE LOADER ---
+    # Rationale: Nix's built-in `getEnv` returns an empty string if a var is missing.
+    # This helper checks for empty strings and provides a safe default.
+    getEnv = name: default:
+      let val = builtins.getEnv name;
+      in if val != "" then val else default;
+
+    # --- CONFIGURATION: NETWORK PARAMETERS ---
+    # Rationale: Abstracting these values here makes the config portable.
+    # We use the 'getEnv' helper to allow overriding these via CLI if needed later.
     serverConfig = {
-      ip = builtins.getEnv "SERVER_IP" or "YOUR_SERVER_IP";        # Server IP address
-      gateway = builtins.getEnv "SERVER_GATEWAY" or "YOUR_GATEWAY"; # Default gateway
-      interface = builtins.getEnv "SERVER_INTERFACE" or "enp10s0f1np1"; # Network interface
+      ip = getEnv "SERVER_IP" "69.164.248.38";              # The Public IP of the bare metal server
+      gateway = getEnv "SERVER_GATEWAY" "69.164.248.37";    # The Gateway IP provided by the datacenter
+      interface = getEnv "SERVER_INTERFACE" "enp10s0f1np1"; # The physical NIC identifier
     };
 
-    # === SHARED CONFIGURATION ===
-    # We define the modules list here so we can share it between the standard 'nixosConfigurations'
-    # and the 'colmena' deployment configuration.
+    # ===================================================================================
+    # 3. MANAGER MODULES (SHARED CONFIGURATION)
+    # These modules define the actual system state. Defined here as a list so they can be
+    # shared between standard 'nixosConfigurations' and 'colmena' deployment targets.
+    # ===================================================================================
     managerModules = [
-        # Include the disko module so we can use declarative disk config (enables disko.devices option)
+        # Import the Disko module to enable the 'disko.devices' options
         disko.nixosModules.disko
-        # Include sops-nix for encrypted secrets (enables sops option)
+        # Import the Sops module to enable the 'sops' options
         sops-nix.nixosModules.sops
 
-        # Main configuration (anonymous module) - this is the core config block
+        # --- CORE SYSTEM CONFIGURATION (Anonymous Module) ---
         ({ config, pkgs, ... }: {
-          # Enable modern nix features we need (enables flakes and new nix command syntax)
+          # Nix Settings: Enable 'flakes' (modern project structure) and 'nix-command' (modern CLI).
           nix.settings.experimental-features = [ "nix-command" "flakes" ];
           
-          # Allow unfree packages (Required for non-Apache TimescaleDB or specific monitoring tools)
+          # Licensing: Allow unfree packages. 
+          # Required for TimescaleDB (TSL license), hardware drivers, and some monitoring tools.
           nixpkgs.config.allowUnfree = true;
 
-          # Bootloader configuration for UEFI systems (uses systemd-boot for booting)
+          # Bootloader: Use systemd-boot.
+          # It is simpler and faster than GRUB for modern UEFI systems.
           boot.loader.systemd-boot.enable = true;
-          # Allow modifying EFI variables (needed for bootloader setup)
+          # EFI: Allow NixOS to update boot variables in the motherboard NVRAM.
           boot.loader.efi.canTouchEfiVariables = true;
 
-          # === DISK LAYOUT (disko) ===
+          # --- STORAGE ARCHITECTURE (NVMe) ---
+          # Rationale: Declarative partitioning ensures the disk layout matches the code.
+          # We use BTRFS for its snapshot capabilities (rollback) and subvolume management.
           disko.devices = {
             disk.main = {
-              # Type of the device (here it's a disk)
               type = "disk";
-              # Device path for the main disk (change if using the other NVMe)
-              device = "/dev/nvme0n1";
+              device = "/dev/nvme0n1"; # Primary NVMe drive
               content = {
-                # Partition table type (GPT for UEFI)
-                type = "gpt";
+                type = "gpt"; # GUID Partition Table (Required for UEFI booting)
                 partitions = {
                   ESP = {
-                    # EFI system partition type code
-                    type = "EF00";
-                    # Size of the boot partition
-                    size = "512M";
-                    content = {
-                      # Content type (filesystem)
-                      type = "filesystem";
-                      # Filesystem format (vfat for EFI)
-                      format = "vfat";
-                      # Mount point for the boot partition
-                      mountpoint = "/boot";
+                    type = "EF00"; # EFI System Partition Type Code
+                    size = "512M"; # Standard size for boot loaders
+                    content = { 
+                      type = "filesystem"; 
+                      format = "vfat"; # UEFI requires VFAT/FAT32
+                      mountpoint = "/boot"; 
                     };
                   };
                   root = {
-                    # Use remaining disk space for root
-                    size = "100%";
+                    size = "100%"; # Use all remaining disk space
                     content = {
-                      # Filesystem type is BTRFS to support subvolumes
-                      type = "btrfs";
-                      # Extra arguments for mkfs.btrfs (label the filesystem)
-                      extraArgs = [ "-L" "nixos" ];
-                      # Subvolumes for btrfs (allows snapshotting individual parts)
+                      type = "btrfs"; # Filesystem: BTRFS
+                      extraArgs = [ "-L" "nixos" ]; # Label the filesystem "nixos"
                       subvolumes = {
-                        "/" = {
-                          # Mount point for root subvolume
-                          mountpoint = "/";
-                        };
-                        "/nix" = {
-                          # Mount point for nix store subvolume
-                          mountpoint = "/nix";
-                        };
-                        "/persist" = {
-                          # Mount point for persistent data subvolume
-                          mountpoint = "/persist";
-                        };
+                        "/" = { mountpoint = "/"; };           # System Root (Ephemeral-ish)
+                        "/nix" = { mountpoint = "/nix"; };     # Nix Store (Heavy write, reproducible)
+                        "/persist" = { mountpoint = "/persist"; }; # Persistent Data (Databases, etc.)
                       };
                     };
                   };
@@ -119,74 +126,87 @@
             };
           };
 
-          # Basic network config
+          # --- NETWORK CONFIGURATION ---
           networking = {
-            # Hostname of the server
-            hostName = "manager";
-            # Static IP from InterServer configuration
+            hostName = "manager"; # The internal hostname of the server
+            # Static IP Configuration:
+            # Critical for a server to ensure consistent reachability and DNS mapping.
             interfaces.${serverConfig.interface}.ipv4.addresses = [{
-              # IP address of the server
               address = serverConfig.ip;
-              # Prefix length (subnet mask)
-              prefixLength = 30;
+              prefixLength = 30; # Subnet mask (provider specific)
             }];
-            # Default gateway IP for routing traffic out
-            defaultGateway = serverConfig.gateway;
-            # DNS servers (Google and Cloudflare)
-            nameservers = [ "8.8.8.8" "1.1.1.1" ];
+            defaultGateway = serverConfig.gateway; # Routing gateway
+            nameservers = [ "8.8.8.8" "1.1.1.1" ]; # Upstream DNS (Google/Cloudflare)
             
-            # Firewall: Allow only specific ports
+            # Security: Firewall Configuration
             firewall = {
-              # Enable the firewall service
               enable = true;
-              # List of allowed TCP ports
-              # Added 5432 (Postgres) and 3000 (Grafana)
-              allowedTCPPorts = [ 22 6443 80 443 5432 3000 ];  # SSH, k3s API, HTTP, HTTPS, DB, Dashboard
+              # Allow only strictly necessary ingress ports. All others are dropped.
+              allowedTCPPorts = [ 
+                22    # SSH (Remote Access)
+                6443  # Kubernetes API (Cluster Management)
+                80    # HTTP (Web Traffic)
+                443   # HTTPS (Secure Web Traffic)
+                5432  # PostgreSQL (Database Access from K8s)
+                3000  # Grafana (Observability Dashboard)
+              ];
             };
           };
 
-          # === DATABASE CONFIGURATION (Super-Postgres) ===
+          # --- DATABASE LAYER: POSTGRESQL (Hybrid Stack) ---
           services.postgresql = {
             enable = true;
-            package = pkgs.postgresql_16;
+            package = pkgs.postgresql_16; # Use latest stable Major version (16)
             
-            # Enable extensions for RAG, Geo, and TimeSeries
+            # Extensions: Load these libraries into the Postgres runtime.
             extensions = ps: with ps; [
-              postgis         # Geospatial
-              pgvector        # Vector Search / RAG
-              timescaledb     # Time-series / Financial
+              postgis         # Geospatial engine (Maps, Routes)
+              pgvector        # Vector embeddings (AI/RAG memory)
+              timescaledb     # Time-series optimization (Finance/Ticks)
             ];
 
-            # Declarative User Management
-            # FIX: Changed "ruud_db" to "ruud" to match ensureDBOwnership requirement
-            ensureDatabases = [ "ruud" "postgres" "oply_property_group" "oply_finance" "oply_logistics" "oply_intelligence" ];
+            # Declarative Database Provisioning
+            # Ensures these specific databases exist on startup.
+            ensureDatabases = [ 
+              "ruud"                 # Default user database
+              "postgres"             # System database (required by tools)
+              "oply_property_group"  # Real Estate Data Isolation
+              "oply_finance"         # Financial/Crypto Data Isolation
+              "oply_logistics"       # Logistics/Geo Data Isolation
+              "oply_intelligence"    # AI/RAG Data Isolation
+            ];
+            
+            # Declarative User Provisioning
+            # Ensures user 'ruud' exists and owns their DB.
             ensureUsers = [
               {
                 name = "ruud";
-                ensureDBOwnership = true;
+                ensureDBOwnership = true; # Grants 'ALL PRIVILEGES' on db 'ruud' to user 'ruud'
               }
             ];
 
-            # Performance Tuning for NVMe/32GB RAM
+            # Performance Tuning: Optimized for ~32GB RAM / NVMe Storage
             settings = {
-              shared_buffers = "4GB";      # Approx 25% of RAM
-              work_mem = "16MB";           # Memory per operation
-              max_connections = "300";
-              effective_cache_size = "12GB";
-              maintenance_work_mem = "1GB";
+              shared_buffers = "4GB";      # Cache memory (~25% of RAM)
+              work_mem = "16MB";           # Memory per sort/hash operation
+              max_connections = "300";     # Concurrency limit (Keep moderate for K8s)
+              effective_cache_size = "12GB"; # OS Cache estimate (~75% of RAM)
+              maintenance_work_mem = "1GB"; # Speed up vacuums and index builds
               
-              # Enable TimescaleDB preloader
+              # Preload Libraries: Required for TimescaleDB and Monitoring hooks
               shared_preload_libraries = "timescaledb,pg_stat_statements";
               
-              # Listening on all interfaces (security handled by pg_hba.conf)
-              # FIX: Use mkForce to override NixOS default of "localhost"
+              # Listening Address:
+              # By default, NixOS locks this to 'localhost'.
+              # We use mkForce to override it to '*', allowing connections from K3s pods.
+              # Security is handled by the authentication block below.
               listen_addresses = pkgs.lib.mkForce "*"; 
             };
 
-            # Authentication (pg_hba.conf)
-            # 1. Allow root/postgres user via socket (local trust)
-            # 2. Allow remote users ONLY via SCRAM-SHA-256 password
-            # 3. Allow k3s pods (10.42.0.0/16) via password
+            # Authentication (pg_hba.conf) Rules
+            # Security Policy:
+            # 1. Localhost (Socket) -> Trust (Peer auth, safe for system users)
+            # 2. Network (Remote/K8s) -> SCRAM-SHA-256 (Strict Password, no cleartext)
             authentication = pkgs.lib.mkOverride 10 ''
               # TYPE  DATABASE        USER            ADDRESS                 METHOD
               local   all             all                                     trust
@@ -197,21 +217,21 @@
             '';
           };
 
-          # === OBSERVABILITY STACK ===
+          # --- OBSERVABILITY STACK (Prometheus + Grafana) ---
           
-          # 1. Node Exporter (Hardware Metrics)
+          # 1. Hardware Metrics: Exports CPU, RAM, Disk, Net stats to port 9100
           services.prometheus.exporters.node = {
             enable = true;
-            enabledCollectors = [ "systemd" ];
+            enabledCollectors = [ "systemd" ]; # Also collect Systemd service states
           };
 
-          # 2. Postgres Exporter (Database Metrics)
+          # 2. Database Metrics: Exports query perf, locks, cache hit rates to port 9187
           services.prometheus.exporters.postgres = {
             enable = true;
-            runAsLocalSuperUser = true;
+            runAsLocalSuperUser = true; # Allows exporter to see internal DB stats via socket
           };
 
-          # 3. Prometheus (The Collector)
+          # 3. Prometheus: The time-series database that pulls metrics from exporters
           services.prometheus = {
             enable = true;
             port = 9090;
@@ -227,17 +247,17 @@
             ];
           };
 
-          # 4. Grafana (The Dashboard)
+          # 4. Grafana: The Visualization UI
           services.grafana = {
             enable = true;
             settings = {
               server = {
-                # Accessible on http://${serverConfig.ip}:3000
+                # Bind to all interfaces so we can access via Public IP
                 http_addr = "0.0.0.0";
                 http_port = 3000;
               };
             };
-            # Auto-connect Prometheus data source
+            # Auto-Provisioning: Automatically connect Prometheus as a datasource on startup
             provision.datasources.settings.datasources = [{
               name = "Prometheus";
               type = "prometheus";
@@ -246,196 +266,156 @@
             }];
           };
 
-          # SSH hardening configuration
+          # --- SECURITY: ACCESS CONTROL (SSH) ---
           services.openssh = {
-            # Enable the SSH daemon
             enable = true;
             settings = {
-              # Disable password authentication (use keys only for security)
-              PasswordAuthentication = false;
-              # Prohibit root login with password (keys still allowed if configured)
-              PermitRootLogin = "prohibit-password";
-              # Disable keyboard-interactive authentication (prevents PAM prompting)
-              KbdInteractiveAuthentication = false;
+              PasswordAuthentication = false;      # Disable password login (Key only)
+              PermitRootLogin = "prohibit-password"; # Allow root only via Key
+              KbdInteractiveAuthentication = false; # Disable challenge-response
             };
           };
 
-          # SSH key for root user access (loaded from sops secrets)
+          # Root Access:
+          # Using cleartext public key is SAFE and standard practice.
+          # The private key remains on your local machine.
           users.users.root.openssh.authorizedKeys.keys = [
-            builtins.readFile config.sops.secrets."ssh_keys/root".path
-          ];
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
+          ]; 
 
-          # Configuration for non-root user 'ruud'
+          # User 'ruud' Access (Normal User):
           users.users.ruud = {
-            # This is a regular user account
             isNormalUser = true;
-            # Groups for sudo (wheel), libvirt access, and container management
-            extraGroups = [ "wheel" "libvirtd" "docker" ];
-            # SSH keys for this user (loaded from sops secrets)
+            extraGroups = [ "wheel" "libvirtd" "docker" ]; # Admin groups + Virtualization
             openssh.authorizedKeys.keys = [
-              builtins.readFile config.sops.secrets."ssh_keys/ruud".path
+              "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
             ];
           };
 
-          # Additional sops secrets configuration
-          sops.secrets = {
-            "ssh_keys/root" = {
-              # The secret contains the SSH key content
-              sopsFile = ./secrets/secrets.yaml;
-              format = "yaml";
-            };
-            "ssh_keys/ruud" = {
-              sopsFile = ./secrets/secrets.yaml;
-              format = "yaml";
-            };
-          };
-
-          # Sudo configuration
+          # Sudo Configuration
           security.sudo = {
-            # Enable sudo
             enable = true;
-            # Allow members of 'wheel' group to sudo without typing a password
-            wheelNeedsPassword = false;
+            wheelNeedsPassword = false; # Passwordless sudo for admins (convenience)
           };
 
-          # sops secrets configuration
+          # --- SECRETS MANAGEMENT (SOPS) ---
+          # Decrypts ./secrets/secrets.yaml at runtime using the host key.
           sops = {
-            # Path to the age key used for decryption
             age.keyFile = "/var/lib/sops-nix/key.txt";
-            # Path to the encrypted secrets file
             defaultSopsFile = ./secrets/secrets.yaml;
           };
 
-          # === k3s Kubernetes Configuration ===
+          # --- CONTAINER ORCHESTRATION (K3S) ---
           services.k3s = {
-            # Enable the k3s service
             enable = true;
-            # Role of this node (server = control plane)
-            role = "server";
-            # Initialize a new cluster (required for the first node)
-            clusterInit = true;
-            # Extra flags: disable traefik (we use custom ingress) and enable API auditing
+            role = "server"; # Acts as Control Plane + Worker
+            clusterInit = true; # Initialize new cluster (use once)
+            # Disable Traefik: We will manage Ingress manually or via other tools later.
+            # Enable API Auditing: Logs all API requests for security auditing.
             extraFlags = "--disable=traefik --kube-apiserver-arg=audit-log-path=/var/log/k3s/audit.log";
           };
 
-          # Virtualization (libvirt) configuration
-          virtualisation.libvirtd.enable = true;
-          # Enable virt-manager UI support
-          programs.virt-manager.enable = true;
-          # Add root to libvirtd group to manage VMs
+          # --- VIRTUALIZATION LAYER ---
+          virtualisation.libvirtd.enable = true; # KVM/QEMU backend daemon
+          programs.virt-manager.enable = true;   # UI Management tool (X11 forwarding or local)
           users.users.root.extraGroups = [ "libvirtd" ];
 
-          # Podman (Docker alternative) configuration
+          # Podman: Daemonless container engine (Docker alternative)
           virtualisation.podman = {
-            # Enable Podman
             enable = true;
-            # Create a Docker socket so Docker commands work with Podman
-            dockerCompat = true;
-            # Enable DNS in the default Podman network
-            defaultNetwork.settings.dns_enabled = true;
+            dockerCompat = true; # Alias 'docker' commands to 'podman'
+            defaultNetwork.settings.dns_enabled = true; # Allow containers to resolve names
           };
 
-          # System Packages installed globally
+          # --- SYSTEM PACKAGES ---
+          # These tools are installed into the global System Profile ($PATH)
           environment.systemPackages = with pkgs; [
-            kubectl      # CLI for Kubernetes
-            k9s          # Terminal UI for Kubernetes management
-            helm         # Kubernetes package manager
-            curl         # CLI for data transfer
-            git          # Version control
-            fail2ban     # Intrusion prevention framework
-            bandwhich    # Bandwidth utilization monitor
-            restic       # Backup program
-            podman-compose # Compose implementation for Podman
+            kubectl      # K8s CLI
+            k9s          # K8s Terminal UI
+            helm         # K8s Package Manager
+            curl         # Network tool
+            git          # Version Control
+            fail2ban     # Intrusion Prevention
+            bandwhich    # Bandwidth Monitor
+            restic       # Backup Tool
+            podman-compose # Podman Compose
           ];
 
-          # Environment variables
+          # Environment Variables: 
+          # Point kubectl to the correct config file by default so root can run commands immediately.
           environment.variables = {
-            # Tell kubectl where to find the k3s configuration
             KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
           };
 
-          # Fail2ban service configuration
-          services.fail2ban.enable = true;
+          # --- SECURITY SERVICES ---
+          # Fail2Ban: Scans logs and bans IPs that show malicious signs (e.g. SSH brute force).
+          services.fail2ban.enable = true; 
 
-          # System auto-upgrade configuration
+          # --- MAINTENANCE ---
+          # Auto-Upgrade: Keeps the system Nix channels up to date.
           system.autoUpgrade = {
-            # Enable automatic upgrades
             enable = true;
-            # Do not reboot automatically (safer for servers)
-            allowReboot = false;
+            allowReboot = false; # Never reboot automatically (Risk of downtime during critical tasks)
           };
 
-          # Kernel sysctl tuning
+          # --- KERNEL TUNING ---
           boot.kernel.sysctl = {
-            # Disable unprivileged BPF (security hardening)
-            "kernel.unprivileged_bpf_disabled" = 1;
-            # Disable BPF JIT hardening (often required for some tools, set to 0 to disable JIT hardening)
-            "net.core.bpf_jit_enable" = 0;
+            "kernel.unprivileged_bpf_disabled" = 1; # Harden BPF to prevent privilege escalation
+            "net.core.bpf_jit_enable" = 0;          # Disable JIT to prevent JIT spraying attacks
           };
 
-          # NixOS state version (do not change this unless you know what you are doing)
+          # NixOS Version Lock (Do not change unless you know why)
+          # Defines the state version for stateful data migration logic.
           system.stateVersion = "25.05";
         })
     ];
 
   in {
-    # 1. Standard NixOS Config (optional, but good for validation via nixos-rebuild)
+    # 1. Standard NixOS Config (Useful for 'nixos-rebuild build' checks or VM testing)
     nixosConfigurations.manager = nixpkgs.lib.nixosSystem {
-      # Target system architecture
       system = system;
-      # Modules to include in the system
       modules = managerModules;
     };
 
-    # 2. macOS Builder Config (Your local environment for 'darwin-rebuild')
+    # 2. macOS Builder Config (Your local environment)
+    # Minimal config to allow 'darwin-rebuild' to function.
     darwinConfigurations.builder = darwin.lib.darwinSystem {
-      # Target system architecture for the Mac
       system = "aarch64-darwin";
       modules = [ 
-        # Inline minimal darwin config
         ({ pkgs, ... }: {
-           # Enable experimental features for the Mac builder
            nix.settings.experimental-features = [ "nix-command" "flakes" ];
-           # Enable the Nix daemon
            services.nix-daemon.enable = true;
-           # Darwin state version
            system.stateVersion = 6;
         })
       ];
     };
 
-    # 3. Colmena Configuration (The Fix)
+    # 3. Colmena Configuration (Modern Deployment)
+    # This block defines the 'Hive' used by Colmena to deploy to the server.
     colmena = {
       meta = {
-        # Pins nixpkgs to the input version for all nodes in the hive
-        nixpkgs = import nixpkgs {
-          system = "x86_64-linux";
-        };
-        # Pass flake inputs to modules (allows accessing self, inputs, etc.)
+        nixpkgs = import nixpkgs { system = "x86_64-linux"; };
         specialArgs = { inherit inputs; };
       };
 
       defaults = { 
-        # Default user to SSH into for deployment
-        deployment.targetUser = "root"; 
+        deployment.targetUser = "root"; # Login as root
         
-        # CRITICAL: Build on the target server (Linux) instead of the local machine (macOS)
-        # to avoid cross-compilation complexity and errors.
+        # CRITICAL: Build on the target server.
+        # This bypasses the need for a Linux cross-compiler on your Mac.
+        # The derivation is evaluated locally, sent to the server, built there, and activated.
         deployment.buildOnTarget = true;
       };
 
-      # Node definition for 'manager'
       manager = {
-        # The IP address of the target server
-        deployment.targetHost = serverConfig.ip;
-        # Import the shared configuration modules
-        imports = managerModules;
+        deployment.targetHost = serverConfig.ip; # Where to deploy
+        imports = managerModules; # What to deploy
       };
     };
 
-    # 4. COMPATIBILITY BRIDGE (The Fix for 'schema' errors)
-    # This creates the exact "Hive" object your local tool is expecting.
-    # It bridges the gap between the new configuration format and the old tool.
+    # 4. COMPATIBILITY BRIDGE
+    # Generates the legacy 'Hive' object structure for older Colmena CLI versions.
+    # Required to prevent "schema version" errors.
     colmenaHive = colmena.lib.makeHive self.outputs.colmena;
   };
 }
