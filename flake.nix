@@ -277,7 +277,7 @@
       ];
     };
 
-    # 3. Colmena Configuration (Clean, no alias)
+    # 3. Colmena Configuration (The Fix)
     colmena = {
       meta = {
         # Pins nixpkgs to the input version for all nodes in the hive
@@ -305,5 +305,10 @@
         imports = managerModules;
       };
     };
+
+    # 4. COMPATIBILITY BRIDGE (The Fix for 'schema' errors)
+    # This creates the exact "Hive" object your local tool is expecting.
+    # It bridges the gap between the new configuration format and the old tool.
+    colmenaHive = colmena.lib.makeHive self.outputs.colmena;
   };
 }
