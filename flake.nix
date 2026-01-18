@@ -1,6 +1,6 @@
 {
   # Human-readable description of what this flake does (used for flake show and other tools)
-  description = "NixForge - Secure Manager Node with k3s";
+  description = "NixForge - Secure Manager Node with k3s + Data Services";
 
   # External dependencies (inputs) the flake uses - these are the sources that the flake depends on
   inputs = {
@@ -46,6 +46,9 @@
         ({ config, pkgs, ... }: {
           # Enable modern nix features we need (enables flakes and new nix command syntax)
           nix.settings.experimental-features = [ "nix-command" "flakes" ];
+          
+          # Allow unfree packages (Required for non-Apache TimescaleDB or specific monitoring tools)
+          nixpkgs.config.allowUnfree = true;
 
           # Bootloader configuration for UEFI systems (uses systemd-boot for booting)
           boot.loader.systemd-boot.enable = true;
@@ -128,8 +131,109 @@
               # Enable the firewall service
               enable = true;
               # List of allowed TCP ports
-              allowedTCPPorts = [ 22 6443 80 443 ];  # SSH, k3s API, HTTP, HTTPS
+              # Added 5432 (Postgres) and 3000 (Grafana)
+              allowedTCPPorts = [ 22 6443 80 443 5432 3000 ];  # SSH, k3s API, HTTP, HTTPS, DB, Dashboard
             };
+          };
+
+          # === DATABASE CONFIGURATION (Super-Postgres) ===
+          services.postgresql = {
+            enable = true;
+            package = pkgs.postgresql_16;
+            
+            # Enable extensions for RAG, Geo, and TimeSeries
+            extensions = ps: with ps; [
+              postgis         # Geospatial
+              pgvector        # Vector Search / RAG
+              timescaledb     # Time-series / Financial
+            ];
+
+            # Declarative User Management
+            # Creates the system users and databases, but does NOT set passwords (securely).
+            ensureDatabases = [ "ruud_db" "logistics_geo" "financial_data" ];
+            ensureUsers = [
+              {
+                name = "ruud";
+                ensureDBOwnership = true;
+              }
+            ];
+
+            # Performance Tuning for NVMe/32GB RAM
+            settings = {
+              shared_buffers = "4GB";      # Approx 25% of RAM
+              work_mem = "16MB";           # Memory per operation
+              max_connections = "300";
+              effective_cache_size = "12GB";
+              maintenance_work_mem = "1GB";
+              
+              # Enable TimescaleDB preloader
+              shared_preload_libraries = "timescaledb,pg_stat_statements";
+              
+              # Listening on all interfaces (security handled by pg_hba.conf)
+              listen_addresses = "*"; 
+            };
+
+            # Authentication (pg_hba.conf)
+            # 1. Allow root/postgres user via socket (local trust)
+            # 2. Allow remote users ONLY via SCRAM-SHA-256 password
+            # 3. Allow k3s pods (10.42.0.0/16) via password
+            authentication = pkgs.lib.mkOverride 10 ''
+              # TYPE  DATABASE        USER            ADDRESS                 METHOD
+              local   all             all                                     trust
+              host    all             all             127.0.0.1/32            scram-sha-256
+              host    all             all             10.42.0.0/16            scram-sha-256
+              host    all             all             ::1/128                 trust
+              host    all             all             0.0.0.0/0               scram-sha-256
+            '';
+          };
+
+          # === OBSERVABILITY STACK ===
+          
+          # 1. Node Exporter (Hardware Metrics)
+          services.prometheus.exporters.node = {
+            enable = true;
+            enabledCollectors = [ "systemd" ];
+          };
+
+          # 2. Postgres Exporter (Database Metrics)
+          services.prometheus.exporters.postgres = {
+            enable = true;
+            runAsLocalSuperUser = true;
+          };
+
+          # 3. Prometheus (The Collector)
+          services.prometheus = {
+            enable = true;
+            port = 9090;
+            scrapeConfigs = [
+              {
+                job_name = "node";
+                static_configs = [{ targets = [ "127.0.0.1:9100" ]; }];
+              }
+              {
+                job_name = "postgres";
+                static_configs = [{ targets = [ "127.0.0.1:9187" ]; }];
+              }
+            ];
+          };
+
+          # 4. Grafana (The Dashboard)
+          services.grafana = {
+            enable = true;
+            settings = {
+              server = {
+                # Accessible on http://69.164.248.38:3000
+                http_addr = "0.0.0.0";
+                http_port = 3000;
+              };
+            };
+            # Auto-connect Prometheus data source
+            provision.datasources.settings.datasources = [{
+              name = "Prometheus";
+              type = "prometheus";
+              access = "proxy";
+              url = "http://127.0.0.1:9090";
+            }];
           };
 
           # SSH hardening configuration
