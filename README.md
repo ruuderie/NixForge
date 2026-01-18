@@ -43,13 +43,13 @@ Create your encrypted secrets file:
 cat > secrets/secrets.yaml << EOF
 ssh_keys:
   root: |
-    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...
+    ssh-ed25519 ...
   ruud: |
-    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...
+    ssh-ed25519 ...
 
 # Add other secrets as needed
-# server_ip: "69.164.248.38"
-# server_gateway: "69.164.248.37"
+# server_ip: "192.168.1.0"
+# server_gateway: "192.164.22.33"
 EOF
 
 # Encrypt the secrets

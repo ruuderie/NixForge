@@ -59,9 +59,10 @@
     # Rationale: Abstracting these values here makes the config portable.
     # We use the 'getEnv' helper to allow overriding these via CLI if needed later.
     serverConfig = {
-      ip = getEnv "SERVER_IP" "69.164.248.38";              # The Public IP of the bare metal server
-      gateway = getEnv "SERVER_GATEWAY" "69.164.248.37";    # The Gateway IP provided by the datacenter
-      interface = getEnv "SERVER_INTERFACE" "enp10s0f1np1"; # The physical NIC identifier
+      # Fallback to a dummy IP to prevent accidental leakage in public code
+      ip = getEnv "SERVER_IP" "127.0.0.1";
+      gateway = getEnv "SERVER_GATEWAY" "127.0.0.1"; 
+      interface = getEnv "SERVER_INTERFACE" "enp10s0f1np1"; # Interface names are generally safe to publish
     };
 
     # ===================================================================================
