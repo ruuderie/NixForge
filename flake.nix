@@ -170,7 +170,8 @@
               shared_preload_libraries = "timescaledb,pg_stat_statements";
               
               # Listening on all interfaces (security handled by pg_hba.conf)
-              listen_addresses = "*"; 
+              # FIX: Use mkForce to override NixOS default of "localhost"
+              listen_addresses = pkgs.lib.mkForce "*"; 
             };
 
             # Authentication (pg_hba.conf)
