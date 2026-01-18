@@ -149,8 +149,8 @@
             ];
 
             # Declarative User Management
-            # Creates the system users and databases, but does NOT set passwords (securely).
-            ensureDatabases = [ "ruud_db" "logistics_geo" "financial_data" ];
+            # FIX: Changed "ruud_db" to "ruud" to match ensureDBOwnership requirement
+            ensureDatabases = [ "ruud" "postgres" "oply_property_group" "oply_finance" "oply_logistics" "oply_intelligence" ];
             ensureUsers = [
               {
                 name = "ruud";
