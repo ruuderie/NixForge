@@ -277,7 +277,7 @@
       ];
     };
 
-    # 3. Colmena Configuration (The Fix)
+    # 3. Colmena Configuration (Clean, no alias)
     colmena = {
       meta = {
         # Pins nixpkgs to the input version for all nodes in the hive
@@ -305,10 +305,5 @@
         imports = managerModules;
       };
     };
-
-    # === DUAL-OUTPUT FIX ===
-    # We output both 'colmena' (new) and 'colmenaHive' (legacy) 
-    # to ensure any version of the tool can find it.
-    colmenaHive = self.outputs.colmena;
   };
 }
