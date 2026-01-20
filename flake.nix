@@ -13,31 +13,31 @@
   # =======================================================================================
   inputs = {
     # NixOS Main Repository: Using 'unstable' for access to the latest kernel and software versions.
-    # Rationale: We need the latest Postgres 16 extensions and K3s updates not found in stable.
+    # Architecture: We track unstable to get Postgres 16, latest K3s, and newest monitoring tools.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Disko: Provides declarative disk partitioning.
-    # Rationale: Allows us to format and partition the NVMe drive via Nix code, ensuring reproducibility
-    # without relying on imperative manual scripts during install.
+    # Architecture: We use code to define partitions (GPT/BTRFS) to ensure the server setup is reproducible 
+    # and not dependent on manual commands run during the initial install.
     disko.url = "github:nix-community/disko";
-    disko.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
+    disko.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment to prevent dependency hell.
 
     # Sops-Nix: Secrets management integration (Mozilla SOPS).
-    # Rationale: Decrypts secrets (API keys, passwords) at runtime using the server's SSH key.
-    # This keeps secrets encrypted in the git repo.
+    # Architecture: This decouples secrets from the codebase. Secrets are encrypted in git
+    # and decrypted only in RAM on the server using its private SSH key.
     sops-nix.url = "github:Mic92/sops-nix";
-    sops-nix.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
+    sops-nix.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment.
 
     # Nix-Darwin: Allows managing the macOS build environment (your local laptop).
-    # Rationale: Ensures your local toolchain (colmena, sops) matches the server's version.
+    # Architecture: Ensures your local toolchain (colmena, sops) matches the server's version.
     darwin.url = "github:LnL7/nix-darwin";
-    darwin.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
+    darwin.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment.
 
     # Colmena: The deployment tool.
-    # Rationale: Replaces 'nixos-rebuild' for remote deployments. It is faster (parallel builds),
-    # has better logs, and handles remote state more robustly.
+    # Architecture: Replaces 'nixos-rebuild' for remote deployments. It offers parallel builds,
+    # better error reporting, and distinct evaluation/build phases for stability.
     colmena.url = "github:zhaofengli/colmena";
-    colmena.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment
+    colmena.inputs.nixpkgs.follows = "nixpkgs"; # Enforce version alignment.
   };
 
   # =======================================================================================
@@ -45,7 +45,7 @@
   # Defines the resulting system configurations for Linux (Server) and Darwin (Local).
   # =======================================================================================
   outputs = { self, nixpkgs, disko, sops-nix, darwin, colmena, ... }@inputs: let
-    # Target Architecture: The server is a standard Intel/AMD 64-bit machine.
+    # Architecture: Target the standard x86_64 linux kernel for the server.
     system = "x86_64-linux";
 
     # === ARCHITECTURAL PATTERN: GITIGNORED CONFIGURATION ===
@@ -54,6 +54,7 @@
     configPath = ./local-config.nix;
     
     # Logic: Try to import the private file. If missing, fail with a helpful error.
+    # This prevents 'localhost' connection errors by enforcing the existence of configuration.
     serverConfig = if builtins.pathExists configPath 
       then import configPath 
       else throw ''
@@ -75,9 +76,9 @@
     # shared between standard 'nixosConfigurations' and 'colmena' deployment targets.
     # ===================================================================================
     managerModules = [
-        # Import the Disko module to enable the 'disko.devices' options
+        # Import the Disko module to enable the 'disko.devices' options for storage.
         disko.nixosModules.disko
-        # Import the Sops module to enable the 'sops' options
+        # Import the Sops module to enable the 'sops' options for secrets.
         sops-nix.nixosModules.sops
 
         # --- CORE SYSTEM CONFIGURATION (Anonymous Module) ---
@@ -90,13 +91,13 @@
           nixpkgs.config.allowUnfree = true;
 
           # Bootloader: Use systemd-boot.
-          # Rationale: It is simpler and faster than GRUB for modern UEFI systems.
+          # Architecture: Simpler and faster than GRUB for UEFI systems. No legacy MBR support needed.
           boot.loader.systemd-boot.enable = true;
           # EFI: Allow NixOS to update boot variables in the motherboard NVRAM.
           boot.loader.efi.canTouchEfiVariables = true;
 
           # --- STORAGE ARCHITECTURE (NVMe) ---
-          # Rationale: Declarative partitioning ensures the disk layout matches the code.
+          # Architecture: Declarative partitioning ensures the disk layout matches the code.
           # We use BTRFS for its snapshot capabilities (rollback) and subvolume management.
           disko.devices = {
             disk.main = {
@@ -135,7 +136,7 @@
           networking = {
             hostName = "manager"; # The internal hostname of the server
             # Static IP Configuration:
-            # Rationale: Critical for a server to ensure consistent reachability and DNS mapping.
+            # Architecture: Critical for a server to ensure consistent reachability and DNS mapping.
             # We load the actual values from the gitignored 'local-config.nix'.
             interfaces.${serverConfig.serverInterface}.ipv4.addresses = [{
               address = serverConfig.serverIP;
@@ -155,12 +156,14 @@
                 443   # HTTPS (Secure Web Traffic)
                 5432  # PostgreSQL (Database Access from K8s)
                 3000  # Grafana (Observability Dashboard)
+                # Note: Ports 9090 (Prometheus) and 3100 (Loki) are purposefully NOT exposed.
+                # They are accessed internally by Grafana via localhost.
               ];
             };
           };
 
           # --- DATABASE LAYER: POSTGRESQL (Hybrid Stack) ---
-          # Rationale: Running DB on bare metal (not inside K8s) provides max NVMe performance
+          # Architecture: Running DB on bare metal (not inside K8s) provides max NVMe performance
           # and simplifies backup/restore of massive datasets.
           services.postgresql = {
             enable = true;
@@ -174,10 +177,11 @@
             ];
 
             # Declarative Database Provisioning
-            # Ensures these specific databases exist on startup.
+            # Architecture: Ensure these databases exist on startup.
             ensureDatabases = [ 
               "ruud"                 # Default user database
               "postgres"             # System database (required by tools)
+              "grafana"              # Grafana Config Storage (Moved from SQLite)
               "oply_property_group"  # Real Estate Data Isolation
               "oply_finance"         # Financial/Crypto Data Isolation
               "oply_logistics"       # Logistics/Geo Data Isolation
@@ -185,12 +189,9 @@
             ];
             
             # Declarative User Provisioning
-            # Ensures user 'ruud' exists and owns their DB.
             ensureUsers = [
-              {
-                name = "ruud";
-                ensureDBOwnership = true; # Grants 'ALL PRIVILEGES' on db 'ruud' to user 'ruud'
-              }
+              { name = "ruud"; ensureDBOwnership = true; }    # Admin user
+              { name = "grafana"; ensureDBOwnership = true; } # Grafana service user
             ];
 
             # Performance Tuning: Optimized for ~32GB RAM / NVMe Storage
@@ -207,14 +208,13 @@
               # Listening Address:
               # By default, NixOS locks this to 'localhost'.
               # We use mkForce to override it to '*', allowing connections from K3s pods.
-              # Security is handled by the authentication block below.
               listen_addresses = pkgs.lib.mkForce "*"; 
             };
 
             # Authentication (pg_hba.conf) Rules
             # Security Policy:
-            # 1. Localhost (Socket) -> Trust (Peer auth, safe for system users)
-            # 2. Network (Remote/K8s) -> SCRAM-SHA-256 (Strict Password, no cleartext)
+            # 1. Localhost (Socket) -> Trust (Peer auth). Used by Grafana (fast/secure).
+            # 2. Network (Remote/K8s) -> SCRAM-SHA-256 (Strict Password, no cleartext).
             authentication = pkgs.lib.mkOverride 10 ''
               # TYPE  DATABASE        USER            ADDRESS                 METHOD
               local   all             all                                     trust
@@ -223,6 +223,63 @@
               host    all             all             ::1/128                 trust
               host    all             all             0.0.0.0/0               scram-sha-256
             '';
+          };
+
+          # --- LOGGING AGGREGATION: LOKI ---
+          # Architecture: Centralized log storage. Receives logs from Promtail.
+          services.loki = {
+            enable = true;
+            configuration = {
+              server.http_listen_port = 3100; # Internal port for log ingestion
+              auth_enabled = false; # No auth needed as it is not exposed to the public internet
+              
+              common = {
+                ring = {
+                  instance_addr = "127.0.0.1"; # Single node cluster
+                  kvstore.store = "inmemory";
+                };
+                replication_factor = 1; # Single node, no replication needed
+                path_prefix = "/var/lib/loki"; # Persistence path
+              };
+
+              # Schema definition for log storage
+              schema_config.configs = [{
+                from = "2024-01-01";
+                store = "tsdb"; # Time Series Database format
+                object_store = "filesystem"; # Store on local NVMe
+                schema = "v13";
+                index = { prefix = "index_"; period = "24h"; };
+              }];
+
+              storage_config.filesystem.directory = "/var/lib/loki/chunks";
+            };
+          };
+
+          # --- LOG SHIPPER: PROMTAIL ---
+          # Architecture: Agent that reads system logs and pushes them to Loki.
+          services.promtail = {
+            enable = true;
+            configuration = {
+              server = { http_listen_port = 9080; grpc_listen_port = 0; };
+              positions.filename = "/var/lib/promtail/positions.yaml"; # Tracks read position in logs
+              
+              # Destination: Push to local Loki instance
+              clients = [{ url = "http://127.0.0.1:3100/loki/api/v1/push"; }];
+
+              # Job: Scrape Systemd Journal (The logs you see with journalctl)
+              scrape_configs = [{
+                job_name = "journal";
+                journal = {
+                  max_age = "12h";
+                  labels = { job = "systemd-journal"; host = "manager"; };
+                };
+                # Relabeling: Makes the logs easier to query by service name in Grafana
+                relabel_configs = [{
+                  source_labels = [ "__journal__systemd_unit" ];
+                  target_label = "unit";
+                }];
+              }];
+            };
           };
 
           # --- OBSERVABILITY STACK (Prometheus + Grafana) ---
@@ -242,7 +299,7 @@
           # 3. Prometheus: The time-series database that pulls metrics from exporters
           services.prometheus = {
             enable = true;
-            port = 9090;
+            port = 9090; # Internal port
             scrapeConfigs = [
               {
                 job_name = "node";
@@ -264,14 +321,33 @@
                 http_addr = "0.0.0.0";
                 http_port = 3000;
               };
+              # Architecture: Store Grafana config (Dashboards/Users) in Postgres.
+              # This ensures backups of Postgres also backup your Dashboard configurations.
+              database = {
+                type = "postgres";
+                user = "grafana";
+                name = "grafana";
+                host = "/run/postgresql"; # Connect via Unix Socket (Fastest/Safest)
+              };
             };
-            # Auto-Provisioning: Automatically connect Prometheus as a datasource on startup
-            provision.datasources.settings.datasources = [{
-              name = "Prometheus";
-              type = "prometheus";
-              access = "proxy";
-              url = "http://127.0.0.1:9090";
-            }];
+            
+            # Auto-Provisioning: Automatically connect Data Sources on startup
+            provision.datasources.settings.datasources = [
+              {
+                # Metrics Source
+                name = "Prometheus";
+                type = "prometheus";
+                access = "proxy";
+                url = "http://127.0.0.1:9090";
+              }
+              {
+                # Logs Source (New)
+                name = "Loki";
+                type = "loki";
+                access = "proxy";
+                url = "http://127.0.0.1:3100";
+              }
+            ];
           };
 
           # --- SECURITY: ACCESS CONTROL (SSH) ---
@@ -286,7 +362,6 @@
 
           # Root Access:
           # Using cleartext public key is SAFE and standard practice.
-          # The private key remains on your local machine.
           users.users.root.openssh.authorizedKeys.keys = [
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE4qb5fQCQ5ZuyRyAKLD81yu12X2Mov0qePbpBwFwAaD"
           ]; 
@@ -318,7 +393,7 @@
             enable = true;
             role = "server"; # Acts as Control Plane + Worker
             clusterInit = true; # Initialize new cluster (use once)
-            # Disable Traefik: We will manage Ingress manually or via other tools later.
+            # Disable Traefik: We will manage Ingress manually.
             # Enable API Auditing: Logs all API requests for security auditing.
             extraFlags = "--disable=traefik --kube-apiserver-arg=audit-log-path=/var/log/k3s/audit.log";
           };
